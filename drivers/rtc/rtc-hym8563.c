@@ -6,7 +6,7 @@
  * Author: Heiko Stuebner <heiko@sntech.de>
  *
  * based on rtc-HYM8563
- * Copyright (C) 2010 ROCKCHIP, Inc.
+ * Copyright (C) 2010 Rockchip Electronics Co., Ltd.
  */
 
 #include <linux/module.h>
@@ -74,6 +74,8 @@
 #define HYM8563_TMR_CTL_MASK	3
 
 #define HYM8563_TMR_CNT		0x0f
+#define HYM8563_TMR_MAXCNT	0xff
+#define HYM8563_TMR_CFG		(HYM8563_TMR_CTL_ENABLE | HYM8563_TMR_CTL_1)
 
 struct hym8563 {
 	struct i2c_client	*client;
@@ -81,6 +83,8 @@ struct hym8563 {
 #ifdef CONFIG_COMMON_CLK
 	struct clk_hw		clkout_hw;
 #endif
+	int alarm_or_timer_irq;
+	int alarm_tm_sec;
 };
 
 /*
@@ -96,12 +100,6 @@ static int hym8563_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	ret = i2c_smbus_read_i2c_block_data(client, HYM8563_SEC, 7, buf);
 	if (ret < 0)
 		return ret;
-
-	if (buf[0] & HYM8563_SEC_VL) {
-		dev_warn(&client->dev,
-			 "no valid clock/calendar values available\n");
-		return -EINVAL;
-	}
 
 	tm->tm_sec = bcd2bin(buf[0] & HYM8563_SEC_MASK);
 	tm->tm_min = bcd2bin(buf[1] & HYM8563_MIN_MASK);
@@ -162,16 +160,22 @@ static int hym8563_rtc_alarm_irq_enable(struct device *dev,
 					unsigned int enabled)
 {
 	struct i2c_client *client = to_i2c_client(dev);
+	struct hym8563 *hym8563 = i2c_get_clientdata(client);
 	int data;
 
 	data = i2c_smbus_read_byte_data(client, HYM8563_CTL2);
 	if (data < 0)
 		return data;
 
-	if (enabled)
-		data |= HYM8563_CTL2_AIE;
-	else
+	if (enabled) {
+		if (hym8563->alarm_or_timer_irq)
+			data |= HYM8563_CTL2_TIE;
+		else
+			data |= HYM8563_CTL2_AIE;
+	} else {
+		data &= ~HYM8563_CTL2_TIE;
 		data &= ~HYM8563_CTL2_AIE;
+	}
 
 	return i2c_smbus_write_byte_data(client, HYM8563_CTL2, data);
 };
@@ -179,6 +183,7 @@ static int hym8563_rtc_alarm_irq_enable(struct device *dev,
 static int hym8563_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alm)
 {
 	struct i2c_client *client = to_i2c_client(dev);
+	struct hym8563 *hym8563 = i2c_get_clientdata(client);
 	struct rtc_time *alm_tm = &alm->time;
 	u8 buf[4];
 	int ret;
@@ -187,8 +192,7 @@ static int hym8563_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alm)
 	if (ret < 0)
 		return ret;
 
-	/* The alarm only has a minute accuracy */
-	alm_tm->tm_sec = 0;
+	alm_tm->tm_sec = hym8563->alarm_tm_sec;
 
 	alm_tm->tm_min = (buf[0] & HYM8563_ALM_BIT_DISABLE) ?
 					-1 :
@@ -207,7 +211,7 @@ static int hym8563_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alm)
 	if (ret < 0)
 		return ret;
 
-	if (ret & HYM8563_CTL2_AIE)
+	if (ret & (HYM8563_CTL2_AIE | HYM8563_CTL2_TIE))
 		alm->enabled = 1;
 
 	return 0;
@@ -216,19 +220,45 @@ static int hym8563_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alm)
 static int hym8563_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alm)
 {
 	struct i2c_client *client = to_i2c_client(dev);
+	struct hym8563 *hym8563 = i2c_get_clientdata(client);
 	struct rtc_time *alm_tm = &alm->time;
+	struct rtc_time tm;
+	time64_t now, alarm, interval;
 	u8 buf[4];
 	int ret;
 
-	ret = i2c_smbus_read_byte_data(client, HYM8563_CTL2);
+	ret = i2c_smbus_write_byte_data(client, HYM8563_TMR_CNT, 0);
 	if (ret < 0)
 		return ret;
 
-	ret &= ~HYM8563_CTL2_AIE;
-
-	ret = i2c_smbus_write_byte_data(client, HYM8563_CTL2, ret);
+	ret = i2c_smbus_write_byte_data(client, HYM8563_CTL2, 0);
 	if (ret < 0)
 		return ret;
+
+	ret = hym8563_rtc_read_time(dev, &tm);
+	if (ret < 0)
+		return ret;
+	alarm = rtc_tm_to_time64(alm_tm);
+	now = rtc_tm_to_time64(&tm);
+	interval = alarm - now;
+
+	/* store alarm tm_sec */
+	hym8563->alarm_tm_sec = alm_tm->tm_sec;
+
+	dev_info(dev, "%s: now:    %ptR\n", __func__, &tm);
+	dev_info(dev, "%s: expired:%ptR\n", __func__, alm_tm);
+	if (interval < HYM8563_TMR_MAXCNT) {
+		hym8563->alarm_or_timer_irq = 1;
+		/* set timer */
+		i2c_smbus_write_byte_data(client, HYM8563_TMR_CNT, (u8)interval);
+		dev_info(&client->dev, "%s: set %dm%ds timer, interval=%ds\n",
+			 __func__, ((u8)interval)/60, ((u8)interval)%60, (u8)interval);
+	} else {
+		hym8563->alarm_or_timer_irq = 0;
+		/* set alarm */
+		alm_tm->tm_sec = 0;
+		dev_info(dev, "%s: set alarm %ptR\n", __func__, alm_tm);
+	}
 
 	buf[0] = (alm_tm->tm_min < 60 && alm_tm->tm_min >= 0) ?
 			bin2bcd(alm_tm->tm_min) : HYM8563_ALM_BIT_DISABLE;
@@ -285,16 +315,19 @@ static unsigned long hym8563_clkout_recalc_rate(struct clk_hw *hw,
 	return clkout_rates[ret];
 }
 
-static long hym8563_clkout_round_rate(struct clk_hw *hw, unsigned long rate,
-				      unsigned long *prate)
+static int hym8563_clkout_determine_rate(struct clk_hw *hw,
+					 struct clk_rate_request *req)
 {
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(clkout_rates); i++)
-		if (clkout_rates[i] <= rate)
-			return clkout_rates[i];
+		if (clkout_rates[i] <= req->rate) {
+			req->rate = clkout_rates[i];
+			return 0;
+		}
 
-	return clkout_rates[0];
+	req->rate = clkout_rates[0];
+	return 0;
 }
 
 static int hym8563_clkout_set_rate(struct clk_hw *hw, unsigned long rate,
@@ -363,7 +396,7 @@ static const struct clk_ops hym8563_clkout_ops = {
 	.unprepare = hym8563_clkout_unprepare,
 	.is_prepared = hym8563_clkout_is_prepared,
 	.recalc_rate = hym8563_clkout_recalc_rate,
-	.round_rate = hym8563_clkout_round_rate,
+	.determine_rate = hym8563_clkout_determine_rate,
 	.set_rate = hym8563_clkout_set_rate,
 };
 
@@ -375,14 +408,15 @@ static struct clk *hym8563_clkout_register_clk(struct hym8563 *hym8563)
 	struct clk_init_data init;
 	int ret;
 
+	/* Enable 32.768kHz clock output by default */
 	ret = i2c_smbus_write_byte_data(client, HYM8563_CLKOUT,
-						0);
+					HYM8563_CLKOUT_ENABLE | HYM8563_CLKOUT_32768);
 	if (ret < 0)
 		return ERR_PTR(ret);
 
 	init.name = "hym8563-clkout";
 	init.ops = &hym8563_clkout_ops;
-	init.flags = 0;
+	init.flags = CLK_IS_CRITICAL;
 	init.parent_names = NULL;
 	init.num_parents = 0;
 	hym8563->clkout_hw.init = &init;
@@ -423,7 +457,10 @@ static irqreturn_t hym8563_irq(int irq, void *dev_id)
 		goto out;
 	}
 
+	dev_dbg(&client->dev, "%s: irq stat 0x%x\n", __func__, data);
 	data &= ~HYM8563_CTL2_AF;
+	data &= ~HYM8563_CTL2_TF;
+	data &= ~0x40;		/* clear undocumented timer-active flag on clones */
 
 	ret = i2c_smbus_write_byte_data(client, HYM8563_CTL2, data);
 	if (ret < 0) {
@@ -439,6 +476,11 @@ out:
 static int hym8563_init_device(struct i2c_client *client)
 {
 	int ret;
+
+	ret = i2c_smbus_read_byte_data(client, HYM8563_CTL1);
+	if (ret < 0)
+		dev_err(&client->dev, "%s: error read i2c data %d\n",
+			__func__, ret);
 
 	/* Clear stop flag if present */
 	ret = i2c_smbus_write_byte_data(client, HYM8563_CTL1, 0);
@@ -461,6 +503,20 @@ static int hym8563_init_device(struct i2c_client *client)
 		ret &= ~HYM8563_CTL2_TF;
 
 	ret &= ~HYM8563_CTL2_TI_TP;
+
+	/*
+	 * Explicitly stop and disable the countdown timer.
+	 * The original vendor code enables the timer here (TMR_CTL = TMR_CFG),
+	 * but this board's HYM8563 clone has an undocumented bit 6 (0x40) in
+	 * CTL2 that mirrors timer activity.  With the timer running, bit 0x40
+	 * is constantly re-asserted, and because the IRQ is level-low triggered,
+	 * this causes an unstoppable interrupt storm.
+	 *
+	 * We still keep CLK_IS_CRITICAL on the clkout so the 32.768 kHz LPO
+	 * clock (needed by the WiFi module) stays enabled.
+	 */
+	i2c_smbus_write_byte_data(client, HYM8563_TMR_CNT, 0);
+	i2c_smbus_write_byte_data(client, HYM8563_TMR_CTL, 0);
 
 	return i2c_smbus_write_byte_data(client, HYM8563_CTL2, ret);
 }
@@ -485,6 +541,12 @@ static int hym8563_suspend(struct device *dev)
 static int hym8563_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
+	int ret;
+
+	ret = i2c_smbus_read_byte_data(client, HYM8563_CTL1);
+	if (ret < 0)
+		dev_err(&client->dev, "%s: error read i2c data %d\n",
+			__func__, ret);
 
 	if (device_may_wakeup(dev))
 		disable_irq_wake(client->irq);
@@ -499,6 +561,19 @@ static int hym8563_probe(struct i2c_client *client)
 {
 	struct hym8563 *hym8563;
 	int ret;
+	/*
+	 * hym8563 initial time(2021_1_1_12:00:00),
+	 * avoid hym8563 read time error
+	 */
+	struct rtc_time tm_read, tm = {
+		.tm_wday = 0,
+		.tm_year = 121,
+		.tm_mon = 0,
+		.tm_mday = 1,
+		.tm_hour = 12,
+		.tm_min = 0,
+		.tm_sec = 0,
+	};
 
 	hym8563 = devm_kzalloc(&client->dev, sizeof(*hym8563), GFP_KERNEL);
 	if (!hym8563)
@@ -525,7 +600,7 @@ static int hym8563_probe(struct i2c_client *client)
 
 		ret = devm_request_threaded_irq(&client->dev, client->irq,
 						NULL, hym8563_irq,
-						irqflags | IRQF_ONESHOT,
+						irqflags | IRQF_ONESHOT | IRQF_NO_AUTOEN,
 						client->name, hym8563);
 		if (ret < 0) {
 			dev_err(&client->dev, "irq %d request failed, %d\n",
@@ -544,8 +619,13 @@ static int hym8563_probe(struct i2c_client *client)
 	if (ret < 0)
 		return ret;
 
-	dev_dbg(&client->dev, "rtc information is %s\n",
+	dev_info(&client->dev, "rtc information is %s\n",
 		(ret & HYM8563_SEC_VL) ? "invalid" : "valid");
+
+	hym8563_rtc_read_time(&client->dev, &tm_read);
+	if ((ret & HYM8563_SEC_VL) || (tm_read.tm_year < 70) || (tm_read.tm_year > 200) ||
+	    (tm_read.tm_mon == -1) || (rtc_valid_tm(&tm_read) != 0))
+		hym8563_rtc_set_time(&client->dev, &tm);
 
 	hym8563->rtc->ops = &hym8563_rtc_ops;
 	set_bit(RTC_FEATURE_ALARM_RES_MINUTE, hym8563->rtc->features);
