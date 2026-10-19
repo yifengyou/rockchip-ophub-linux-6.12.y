@@ -323,7 +323,14 @@
 	};
 };
 
-&gpu {
+/*
+ * Use the Panthor GPU node (arm,mali-valhall-csf / rockchip,rk3588-mali),
+ * matched by the mainline DRM_PANTHOR driver — the correct driver for the
+ * Mali-G610 (Valhall CSF) on RK3588.  The other gpu node in vngpu.dtsi is
+ * "arm,mali-bifrost" (for panfrost/kbase), which doesn't properly support
+ * the G610 CSF, so leave it disabled.
+ */
+&gpu_panthor {
 	mali-supply = <&vdd_gpu_s0>;
 	status = "okay";
 };
@@ -783,10 +790,53 @@
 	status = "okay";
 };
 
+/*
+ * rk3588-vngpu.dtsi redefines the NPU as a single "rockchip,rk3588-rknpu"
+ * node (for the out-of-tree vendor rknpu driver) that merges into the
+ * mainline rknn_core_0 node from rk3588-base.dtsi.  The merge replaces
+ * rknn_core_0's per-core properties with vendor ones (8 clocks, a wide
+ * reg window spanning fdab/fdac/fdad, 3 power-domains, iommus=<&rknpu_mmu>,
+ * etc.), which the mainline "rocket" DRM accel driver cannot use:
+ *   - rocket's clks[4] vs the 8 DT clocks -> devm_clk_bulk_get fails;
+ *   - reg-names pc/cna/core now point at fdab0000/fdac0000/fdad0000
+ *     instead of fdab0000/fdab1000/fdab3000 -> wrong registers;
+ *   - iommus=<&rknpu_mmu> whose reg overlaps rknn_mmu_1/2 -> IOMMU probe
+ *     fails with -EBUSY and core 0 never binds (deferred probe timeout).
+ *
+ * Restore the base rknn_core_0 properties here (last write wins) so the
+ * rocket driver binds core 0 cleanly.  Drop the vendor-only properties.
+ */
 &rknn_core_0 {
+	compatible = "rockchip,rk3588-rknn-core";
+	reg = <0x0 0xfdab0000 0x0 0x1000>,
+	      <0x0 0xfdab1000 0x0 0x1000>,
+	      <0x0 0xfdab3000 0x0 0x1000>;
+	reg-names = "pc", "cna", "core";
+	interrupts = <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH 0>;
+	/delete-property/ interrupt-names;
+	clocks = <&cru ACLK_NPU0>, <&cru HCLK_NPU0>,
+		 <&scmi_clk SCMI_CLK_NPU>, <&cru PCLK_NPU_ROOT>;
+	clock-names = "aclk", "hclk", "npu", "pclk";
+	resets = <&cru SRST_A_RKNN0>, <&cru SRST_H_RKNN0>;
+	reset-names = "srst_a", "srst_h";
+	power-domains = <&power RK3588_PD_NPUTOP>;
+	/delete-property/ power-domain-names;
+	/delete-property/ operating-points-v2;
+	iommus = <&rknn_mmu_0>;
 	npu-supply = <&vdd_npu_s0>;
 	sram-supply = <&vdd_npu_s0>;
 	status = "okay";
+};
+
+/*
+ * rknpu_mmu (vngpu) merges into rknn_mmu_0 (base) at /iommu@fdab9000 and
+ * widens its reg to fdab9000/fdaba000/fdaca000/fdada000, which overlaps
+ * rknn_mmu_1 (fdaca000) and rknn_mmu_2 (fdada000) and makes those fail
+ * with -EBUSY.  Keep rknpu_mmu disabled; the per-core rknn_mmu_0/1/2 are
+ * enabled below and used by rocket via iommus=<&rknn_mmu_0> on each core.
+ */
+&rknpu_mmu {
+	status = "disabled";
 };
 
 &rknn_core_1 {
@@ -801,7 +851,19 @@
 	status = "okay";
 };
 
+/*
+ * Restore the base rknn_mmu_0 properties that vngpu's rknpu_mmu merge
+ * widened (reg spanning fdaca000/fdada000, 6 clocks, 3 interrupts).  The
+ * wide reg overlaps rknn_mmu_1/2 and causes -EBUSY on those IOMMUs.
+ */
 &rknn_mmu_0 {
+	compatible = "rockchip,rk3588-iommu", "rockchip,rk3568-iommu";
+	reg = <0x0 0xfdab9000 0x0 0x100>,
+	      <0x0 0xfdaba000 0x0 0x100>;
+	interrupts = <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH 0>;
+	/delete-property/ interrupt-names;
+	clocks = <&cru ACLK_NPU0>, <&cru HCLK_NPU0>;
+	clock-names = "aclk", "iface";
 	status = "okay";
 };
 
