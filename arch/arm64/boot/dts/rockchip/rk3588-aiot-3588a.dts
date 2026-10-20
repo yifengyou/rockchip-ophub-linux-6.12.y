@@ -4,7 +4,7 @@
  * Copyright (c) 2023 Thomas McKahan
  * Copyright (c) 2024 Linaro Ltd.
  *
- * AIoT-3588IED board device tree source
+ * AIoT-3588A board device tree source
  * Based on rk3588-nanopc-t6.dtsi, with hardware
  * differences adjusted per factory-image boot.dts.
  */
@@ -21,8 +21,8 @@
 #include "rk3588-vngpu.dtsi"
 
 / {
-	model = "AIoT 3588IED";
-	compatible = "rockchip,rk3588-aiot-3588ied", "rockchip,rk3588";
+	model = "AIoT 3588A";
+	compatible = "rockchip,rk3588-aiot-3588a", "rockchip,rk3588";
 
 	aliases {
 		mmc0 = &sdhci;

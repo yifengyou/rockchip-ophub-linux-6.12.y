@@ -5,7 +5,7 @@ set -ex
 TARGET_IP="${1:-192.168.33.43}"
 TARGET_USER="root"
 TARGET_PASS="admin"
-REMOTE_DIR="/boot/6.12"
+REMOTE_DIR="/boot/ophub-6.12"
 
 SSH_CMD="sshpass -p ${TARGET_PASS} ssh ${TARGET_USER}@${TARGET_IP}"
 RSYNC_CMD="sshpass -p ${TARGET_PASS} rsync -avz"

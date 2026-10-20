@@ -1,11 +1,11 @@
-name: aiot-3588ied ophub-6.12.y build
+name: aiot-3588a ophub-6.12.y build
 
 on:
   repository_dispatch:
   workflow_dispatch:
   push:
     branches:
-      - aiot-3588ied
+      - aiot-3588a
 
 env:
   TZ: Asia/Shanghai
@@ -70,14 +70,14 @@ jobs:
       - name: Upload Kernel to Release
         uses: ncipollo/release-action@main
         with:
-          tag: aiot-3588ied_ophub-6.12.y
+          tag: aiot-3588a_ophub-6.12.y
           artifacts: ./release/*
           allowUpdates: true
           removeArtifacts: false
           replacesArtifacts: true
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
-            # aiot-3588ied ophub-6.12.y
+            # aiot-3588a ophub-6.12.y
 
             ## 免责声明
             - **按原样提供**：镜像不作任何保证，使用风险自负

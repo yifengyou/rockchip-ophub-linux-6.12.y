@@ -9,8 +9,8 @@ mkdir -p ${WORKDIR}/release
 # >>> 可配置变量区 <<<
 # >>> Configurable Variables Section <<<
 # ==========================================
-DEFCONFIG="aiot_3588ied_defconfig"
-DTB_NAME="rockchip/rk3588-aiot-3588ied.dtb"
+DEFCONFIG="aiot_3588a_defconfig"
+DTB_NAME="rockchip/rk3588-aiot-3588a.dtb"
 ARCH="arm64"
 CROSS_COMPILE="aarch64-linux-gnu-"
 LOCALVERSION="-kdev"
@@ -21,7 +21,7 @@ LOCALVERSION="-kdev"
 cd ${WORKDIR}/
 
 # 使用指定的 defconfig 生成内核配置
-# Generate kernel configuration using the specified defconfig
+# Generate kernel configuration using the specifa defconfig
 make ARCH=${ARCH} \
   CROSS_COMPILE=${CROSS_COMPILE} \
   KBUILD_BUILD_USER="builder" \
@@ -277,7 +277,7 @@ if [ "${ARCH}" = "arm64" ] && [ -d "arch/arm/include/asm" ]; then
 fi
 
 # 递归复制所有 Makefile/Kconfig/Kbuild 文件（排除已复制目录和 .git）
-# Recursively copy all Makefile/Kconfig/Kbuild files (excluding already copied dirs and .git)
+# Recursively copy all Makefile/Kconfig/Kbuild files (excluding already copa dirs and .git)
 find . -type f \( -name "Makefile" -o -name "Makefile.*" \
   -o -name "Kconfig" -o -name "Kconfig.*" \
   -o -name "Kbuild" -o -name "Kbuild.*" \) \
