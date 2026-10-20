@@ -664,7 +664,9 @@
 	reset-gpios = <&gpio3 RK_PC6 GPIO_ACTIVE_HIGH>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&pcie2_0_rst &wifi_poweren>;
-	status = "okay";
+	/* 暂禁用：6.18 pcie-dw-rockchip 在本板初始化时挂死，
+	 * 先验证非 PCIe 路径能正常引导。 */
+	status = "disabled";
 };
 
 &pcie2x1l1 {
@@ -673,17 +675,24 @@
 
 &pcie2x1l2 {
 	reset-gpios = <&gpio1 RK_PB4 GPIO_ACTIVE_HIGH>;
-	status = "okay";
+	/* 暂禁用：同上。 */
+	status = "disabled";
 };
 
 &pcie30phy {
-	status = "okay";
+	/* 对齐原厂 5.10 固件 rockchip,pcie30-phymode=<4> 聚合模式。
+	 * 6.18 phy 驱动改用 data-lanes 属性；不设 data-lanes 时默认聚合，
+	 * 与原厂意图一致。 */
+	/* 暂禁用：同上。 */
+	status = "disabled";
 };
 
 &pcie3x4 {
 	reset-gpios = <&nca9555 15 GPIO_ACTIVE_HIGH>;
 	vpcie3v3-supply = <&vcc3v3_pcie30>;
-	status = "okay";
+	/* 暂禁用：6.18 pcie-dw-rockchip 初始化时在 DBI 寄存器访问挂死，
+	 * 导致 AXI 总线死锁、系统无响应。先禁用以验证基础引导。 */
+	status = "disabled";
 };
 
 &pinctrl {
@@ -1370,6 +1379,20 @@
 };
 
 &wdt {
+	status = "disabled";
+};
+
+/* 对齐官方 5.10 固件：禁用 ARM MMU-600 (SMMU v3)。
+ * 官方 v20 DTB 中 fc900000 和 fcb00000 均为 status="disabled"。
+ * 6.18 base dtsi 未设 status（默认 enabled），导致 reboot 时
+ * arm_smmu_device_disable() 的 CR0ACK 寄存器轮询挂死，
+ * device_shutdown 卡在 "arm-smmu-v3 fc900000.iommu: shutdown"。
+ * PCIe 控制器已禁用，SMMU 无使用场景，直接禁用。 */
+&mmu600_pcie {
+	status = "disabled";
+};
+
+&mmu600_php {
 	status = "disabled";
 };
 
